@@ -1,1 +1,2 @@
 # SmolSlimeWebConfigurator
+自用修改
