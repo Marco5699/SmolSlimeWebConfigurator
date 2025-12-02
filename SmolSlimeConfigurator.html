@@ -60,7 +60,6 @@
             <div class="flex border-b border-gray-700">
                 <button @click="activeTab = 'tracker'" :class="tabClass('tracker')">Tracker</button>
                 <button @click="activeTab = 'receiver'" :class="tabClass('receiver')">Receiver</button>
-                <button @click="activeTab = 'flasher'" :class="tabClass('flasher')">Firmware Flasher</button>
             </div>
             <div class="p-4">
                 <!-- Tracker Tab Content -->
@@ -80,6 +79,11 @@
                 </div>
                 <!-- Receiver Tab Content -->
                 <div x-show="activeTab === 'receiver'" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                    <button @click="sendCommand('send all shutdown')" class="btn">關閉所有追蹤器</button>
+                    <button @click="sendCommand('send all calibrate')" class="btn">校準所有追蹤器</button>
+                    <button @click="sendCommand('send all channel 50')" class="btn">信道切換至50(含追蹤器)</button>
+                    <button @click="sendCommand('send all channel 76')" class="btn">信道切換至76(含追蹤器)</button>
+                    <button @click="sendCommand('send all dfu')" class="btn">所有追蹤器進入DFU模式</button>
                     <button @click="sendCommand('info')" class="btn">Info</button>
                     <button @click="sendCommand('list')" class="btn">List</button>
                     <button @click="sendCommand('reboot')" class="btn">Reboot</button>
@@ -90,51 +94,6 @@
                     <button @click="sendCommand('dfu')" class="btn">DFU</button>
                     <button @click="sendCommand('uptime')" class="btn">Uptime</button>
                     <button @click="sendCommand('meow')" class="btn">Meow!</button>
-                </div>
-                <!-- Firmware Flasher Tab Content -->
-                <div x-show="activeTab === 'flasher'" class="space-y-6">
-                    <div>
-                        <h3 class="text-lg font-semibold text-white mb-2">Firmware Flashing Guide</h3>
-                        <p class="text-sm text-gray-400">Follow these steps to update your device's firmware. You must put your device into DFU/bootloader mode manually for this to work (often by double-tapping the reset button, or sending the 'dfu' command while connected).</p>
-                    </div>
-
-                    <!-- Step 1: Download -->
-                    <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                        <h4 class="font-bold text-white">Part 1: Download Firmware</h4>
-                        <div class="flex items-center gap-3 mt-2">
-                            <select x-model="selectedFirmwareUrl" :disabled="isLoadingFirmware || firmwareList.length === 0" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full md:w-auto p-2.5">
-                                <template x-if="isLoadingFirmware"><option value="">Loading...</option></template>
-                                <template x-if="!isLoadingFirmware && firmwareList.length > 0"><option value="">-- Select Latest Firmware --</option></template>
-                                <template x-if="!isLoadingFirmware && firmwareList.length === 0"><option value="">Could not load list</option></template>
-                                <template x-for="fw in firmwareList" :key="fw.url"><option :value="fw.url" x-text="fw.name"></option></template>
-                            </select>
-                            <button @click="downloadFirmware()" :disabled="!selectedFirmwareUrl" class="btn-primary">Download</button>
-                        </div>
-                        <p class="text-xs text-gray-500 mt-2">This will save the selected firmware file to your computer's "Downloads" folder.</p>
-                    </div>
-
-                    <!-- Step 2 & 3: Select File and Target -->
-                    <div class="grid md:grid-cols-2 gap-4">
-                        <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                            <h4 class="font-bold text-white">Part 2: Select Local File</h4>
-                            <button @click="selectFlashFile()" class="btn-secondary w-full mt-2">Select .uf2 File</button>
-                            <p class="text-xs text-gray-400 mt-2 h-4">Selected: <span class="font-mono text-green-400" x-text="flashFile ? flashFile.name : 'None'"></span></p>
-                        </div>
-                        <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                            <h4 class="font-bold text-white">Part 3: Select Target Drive</h4>
-                            <button @click="selectFlashTarget()" class="btn-secondary w-full mt-2">Select Device Drive</button>
-                            <p class="text-xs text-gray-400 mt-2 h-4">Selected: <span class="font-mono text-green-400" x-text="flashTarget ? flashTarget.name : 'None'"></span></p>
-                        </div>
-                    </div>
-                    
-                    <!-- Step 4: Write -->
-                    <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                        <h4 class="font-bold text-white">Part 4: Write to Device</h4>
-                        <button @click="writeFirmware()" :disabled="!flashFile || !flashTarget" class="btn-primary w-full mt-2 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                            Write Firmware to Device
-                        </button>
-                        <p class="text-xs text-gray-500 mt-2">This button is enabled only when both a file and a target drive are selected.</p>
-                    </div>
                 </div>
             </div>
         </div>
@@ -176,14 +135,9 @@
                 
                 // UI State
                 activeTab: 'tracker', customCommand: '',
-                
-                // Firmware Flasher State
-                firmwareList: [], selectedFirmwareUrl: '', isLoadingFirmware: true,
-                flashFile: null, flashTarget: null,
 
                 init() {
                     this.ansiConverter = new AnsiUp();
-                    this.fetchFirmware();
                     if ('serial' in navigator) {
                         this.appendSystemLog('Welcome! Click "Connect" to begin.');
                         navigator.serial.getPorts().then(ports => {
@@ -286,67 +240,6 @@
                 sendCustomCommand() {
                     if (this.customCommand.trim()) { this.sendCommand(this.customCommand.trim()); this.customCommand = ''; }
                 },
-                
-                async fetchFirmware() {
-                    this.isLoadingFirmware = true;
-                    try {
-                        const response = await fetch("https://api.github.com/repos/Shine-Bright-Meow/SlimeNRF-Firmware-CI/releases/latest");
-                        if (!response.ok) throw new Error(`API responded with ${response.status}`);
-                        const data = await response.json();
-                        this.firmwareList = data.assets.filter(a => a.name.endsWith('.uf2')).map(a => ({ name: a.name, url: a.browser_download_url }));
-                        if (this.firmwareList.length === 0) { this.appendSystemLog('[FIRMWARE] No .uf2 files found.'); }
-                    } catch (error) { this.appendErrorLog(`Could not fetch firmware list: ${error.message}`); } 
-                    finally { this.isLoadingFirmware = false; }
-                },
-
-                // --- FIRMWARE FLASHER METHODS ---
-                downloadFirmware() {
-                    if (!this.selectedFirmwareUrl) return;
-                    this.appendSystemLog(`[FLASH] Starting download for: ${this.selectedFirmwareUrl.split('/').pop()}`);
-                    const link = document.createElement('a');
-                    link.href = this.selectedFirmwareUrl;
-                    link.download = ''; // Let browser handle filename
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                },
-
-                async selectFlashFile() {
-                    try {
-                        const [fileHandle] = await window.showOpenFilePicker({ types: [{ description: 'UF2 Files', accept: { 'application/octet-stream': ['.uf2'] } }] });
-                        this.flashFile = { handle: fileHandle, name: fileHandle.name };
-                    } catch(error) { if (error.name !== 'AbortError') this.appendErrorLog(`File selection failed: ${error.message}`); }
-                },
-
-                async selectFlashTarget() {
-                    try {
-                        const dirHandle = await window.showDirectoryPicker();
-                        this.flashTarget = { handle: dirHandle, name: dirHandle.name };
-                    } catch(error) { if (error.name !== 'AbortError') this.appendErrorLog(`Target selection failed: ${error.message}`); }
-                },
-
-                async writeFirmware() {
-                    if (!this.flashFile || !this.flashTarget) return;
-                    this.appendSystemLog(`[FLASH] Starting write process...`);
-                    try {
-                        if (await this.flashTarget.handle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
-                            throw new Error("Write permission for the target drive was not granted.");
-                        }
-                        const file = await this.flashFile.handle.getFile();
-                        this.appendSystemLog(`[FLASH] Writing ${file.name} (${(file.size/1024).toFixed(1)} KB) to drive '${this.flashTarget.name}'...`);
-                        
-                        const writableFileHandle = await this.flashTarget.handle.getFileHandle(file.name, { create: true });
-                        const writable = await writableFileHandle.createWritable();
-                        await writable.write(file);
-                        await writable.close();
-
-                        this.appendSystemLog(`[FLASH SUCCESS] Firmware written! Device should reboot shortly.`);
-                        this.flashFile = null;
-                        this.flashTarget = null;
-                    } catch (error) {
-                        this.appendErrorLog(`[FLASH FAILED] ${error.message}`);
-                    }
-                }
             };
         }
     </script>
